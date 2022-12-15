@@ -1,0 +1,70 @@
+#!/usr/bin/env python
+
+from larndsim import voxelize as vox
+
+from LarpixParser import hit_parser as HitParser
+from LarpixParser import event_parser as EvtParser
+from LarpixParser.geom_to_dict import larpix_layout_to_dict
+from LarpixParser import util
+
+import h5py
+import numpy as np
+import tqdm
+
+voxel_dtype = np.dtype([("eventID", "u4"),
+                        ("xBin", "f4"),
+                        ("yBin", "f4"),
+                        ("zBin", "f4"),
+                        ("dE", "f4")],
+                       align = True)
+
+def main(args):    
+    infile = h5py.File(args.infile, 'r')
+    outfile = h5py.File(args.output, 'w')    
+    
+    for key in infile.keys():
+        if type(infile[key]) == h5py.Dataset:
+            outfile.create_dataset(key, data = infile[key])
+        elif type(infile[key]) == h5py.Group:
+            outfile.create_group(key)
+            infile.copy(infile[key], outfile[key], key)
+            
+    outfile.create_dataset("track_voxels",
+                           shape = (0,),
+                           dtype = voxel_dtype,
+                           maxshape = (None,))
+
+    tracks = infile['tracks']
+
+    for track_ev_id in tqdm.tqdm(np.unique(tracks['eventID'])):
+
+        tracks_ev = tracks[tracks['eventID'] == track_ev_id]
+            
+        voxelizedEdep = vox.voxelize(tracks_ev)
+
+        nVox = len(voxelizedEdep[1])
+        evVoxels = np.empty(nVox, dtype = voxel_dtype)
+        evVoxels['xBin'] = np.array([pos[0] for pos in voxelizedEdep[0]])
+        evVoxels['yBin'] = np.array([pos[1] for pos in voxelizedEdep[0]])
+        evVoxels['zBin'] = np.array([pos[2] for pos in voxelizedEdep[0]])
+        evVoxels['dE'] = voxelizedEdep[1]
+        evVoxels['eventID'] = track_ev_id*np.ones(nVox)
+
+        nVoxPrev = len(outfile['track_voxels'])
+        outfile['track_voxels'].resize((nVox+nVoxPrev,))
+        outfile['track_voxels'][nVoxPrev:] = evVoxels
+        
+if __name__ == '__main__':
+
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('infile', type = str,
+                        help = "input hdf5 larpix file (from dumpTree.py)")
+    parser.add_argument('-o', '--output', type = str,
+                        required = True,
+                        help = "output hdf5 file containing an additional database of voxelized edeps")
+
+    args = parser.parse_args()
+
+    main(args)
