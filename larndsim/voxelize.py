@@ -45,7 +45,7 @@ trackVoxelEdges = (np.linspace(xMin, xMax, nVoxX + 1),
 from collections import defaultdict
 
 def voxelize(tracks):
-    sampleDensity = 1000 # samples per unit (mm) length
+    sampleDensity = 100000 # samples per unit (mm) length
 
     # print ('voxelizing tracks')
     # for track in tqdm.tqdm(tracks):
