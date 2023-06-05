@@ -12,26 +12,39 @@ import numpy as np
 import tqdm
 from collections import defaultdict
 
-# a bit wider than the generation volume
-xMin, xMax, xWidth = 410.0, 920.0, 0.38
-yMin, yMax, yWidth = -225.0, 85.0, 0.38
-zMin, zMax, zWidth = -305.0, 405.0, 0.38
+def voxelize(tracks, config):
+    # a bit wider than the generation volume
+    # xMin, xMax, xWidth = 410.0, 920.0, 0.38
+    # yMin, yMax, yWidth = -225.0, 85.0, 0.38
+    # zMin, zMax, zWidth = -305.0, 405.0, 0.38
 
-nVoxX = int((xMax - xMin)/xWidth)
-nVoxY = int((yMax - yMin)/yWidth)
-nVoxZ = int((zMax - zMin)/zWidth)
+    if config == 'ND-LAr':
+        # # ND-LAr
+        # xMin, xMax, xWidth = -380., 950., 0.38
+        # yMin, yMax, yWidth = -380., 950., 0.38
+        # zMin, zMax, zWidth = -380., 950., 0.38
+    elif config == '2x2':
+        # 2x2
+        xMin, xMax, xWidth = -65.5, 65.5, 0.4434
+        yMin, yMax, yWidth = -24., 108., 0.4434
+        zMin, zMax, zWidth = -66.5, 66.5, 0.4434
+    else:
+        raise LookupError ("config should be specified as one of: 'ND-LAr', '2x2'")
 
-minVox = np.array([xMin, yMin, zMin])
-maxVox = np.array([xMax, yMax, zMax])
+    nVoxX = int((xMax - xMin)/xWidth)
+    nVoxY = int((yMax - yMin)/yWidth)
+    nVoxZ = int((zMax - zMin)/zWidth)
+    
+    minVox = np.array([xMin, yMin, zMin])
+    maxVox = np.array([xMax, yMax, zMax])
 
-spacing = np.array([xWidth, yWidth, zWidth])
+    spacing = np.array([xWidth, yWidth, zWidth])
 
-trackVoxelEdges = (np.linspace(xMin, xMax, nVoxX + 1),
-                   np.linspace(yMin, yMax, nVoxY + 1),
-                   np.linspace(zMin, zMax, nVoxZ + 1))
+    trackVoxelEdges = (np.linspace(xMin, xMax, nVoxX + 1),
+                       np.linspace(yMin, yMax, nVoxY + 1),
+                       np.linspace(zMin, zMax, nVoxZ + 1))
 
-def voxelize(tracks):
-    sampleDensity = 100000 # samples per unit (mm) length
+    sampleDensity = 1000 # samples per unit (mm) length
 
     # print ('voxelizing tracks')
     # for track in tqdm.tqdm(tracks):
@@ -62,6 +75,8 @@ def voxelize(tracks):
 
     ind = np.cast[int]((samplePoints - minVox)//spacing)
 
+    # print (samplePoints)
+    # print (ind)
     # get the bin centers that correspond to each track sample
     binCenters = np.array([trackVoxelEdges[i][ind[:,i]] + 0.5*spacing[i]
                            for i in range(3)])
@@ -104,7 +119,7 @@ def main(args):
 
         tracks_ev = tracks[tracks['eventID'] == track_ev_id]
             
-        voxelizedEdep = vox.voxelize(tracks_ev)
+        voxelizedEdep = voxelize(tracks_ev, args.config)
 
         nVox = len(voxelizedEdep[1])
         evVoxels = np.empty(nVox, dtype = voxel_dtype)
@@ -125,6 +140,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('infile', type = str,
                         help = "input hdf5 larpix file (from dumpTree.py)")
+    parser.add_argument('-c', '--config', type = str,
+                        default = 'ND-LAr',
+                        help = "voxel boundary configuration.  Should be one of: 'ND-LAr', '2x2'")
     parser.add_argument('-o', '--output', type = str,
                         required = True,
                         help = "output hdf5 file containing an additional database of voxelized edeps")

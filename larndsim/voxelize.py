@@ -1,9 +1,12 @@
 import numpy as np
 
 # a bit wider than the generation volume
-xMin, xMax, xWidth = 410.0, 920.0, 0.38
-yMin, yMax, yWidth = -225.0, 85.0, 0.38
-zMin, zMax, zWidth = -305.0, 405.0, 0.38
+# xMin, xMax, xWidth = 410.0, 920.0, 0.38
+# yMin, yMax, yWidth = -225.0, 85.0, 0.38
+# zMin, zMax, zWidth = -305.0, 405.0, 0.38
+xMin, xMax, xWidth = 400.0, 950.0, 0.38
+yMin, yMax, yWidth = -250.0, 100.0, 0.38
+zMin, zMax, zWidth = -350.0, 450.0, 0.38
 
 nVoxX = int((xMax - xMin)/xWidth)
 nVoxY = int((yMax - yMin)/yWidth)
@@ -77,6 +80,8 @@ def voxelize(tracks):
     ind = np.cast[int]((samplePoints - minVox)//spacing)
 
     # get the bin centers that correspond to each track sample
+    print (samplePoints)
+    print (ind)
     binCenters = np.array([trackVoxelEdges[i][ind[:,i]] + 0.5*spacing[i]
                            for i in range(3)])
 
