@@ -9,10 +9,43 @@ from LarpixParser import util
 
 import h5py
 import numpy as np
+from scipy import stats as st
 import tqdm
 from collections import defaultdict
 
-def voxelize(tracks, config):
+def get_traj(track_segment, trajectories):
+    thisTraj = trajectories[trajectories['trackID'] == track_segment['trackID']]
+    return thisTraj
+
+def get_ancestor_traj(traj, trajectories):
+    # print (traj['parentID'])
+    if traj['parentID'] == -1:
+        return traj
+    else:
+        parent_traj = trajectories[trajectories['trackID'] == traj['parentID']]
+        return get_ancestor_traj(parent_traj, trajectories)
+
+def track_labeller(tracks, trajectories, method = 'pid'):
+    if method == 'primary':
+        anc_labels = {13: 0,
+                      22: 1}
+        labels = np.empty(tracks.shape[0])
+        for i, thisTrack in enumerate(tracks):
+            thisTraj = get_traj(thisTrack, trajectories)
+            anc = get_ancestor_traj(thisTraj, trajectories)
+            labels[i] = anc_labels[anc['pdgId'][0]]
+    elif method == 'pid':
+        labels = np.empty(tracks.shape[0])
+        for i, thisTrack in enumerate(tracks):
+            thisTraj = get_traj(thisTrack, trajectories)
+            if thisTraj['pdgId'][0] == 13:
+                labels[i] = 0
+            else:
+                labels[i] = 1
+            
+    return labels
+
+def voxelize(tracks, trajectories, config):
     # a bit wider than the generation volume
     # xMin, xMax, xWidth = 410.0, 920.0, 0.38
     # yMin, yMax, yWidth = -225.0, 85.0, 0.38
@@ -23,13 +56,18 @@ def voxelize(tracks, config):
         xMin, xMax, xWidth = -380., 950., 0.38
         yMin, yMax, yWidth = -380., 950., 0.38
         zMin, zMax, zWidth = -380., 950., 0.38
+    elif config == 'fineVox':
+        # finer voxelization
+        xMin, xMax, xWidth = -2000., 2000., 0.1
+        yMin, yMax, yWidth = -2000., 2000., 0.1
+        zMin, zMax, zWidth = -2000., 2000., 0.1
     elif config == '2x2':
         # 2x2
         xMin, xMax, xWidth = -65.5, 65.5, 0.4434
         yMin, yMax, yWidth = -24., 108., 0.4434
         zMin, zMax, zWidth = -66.5, 66.5, 0.4434
     else:
-        raise LookupError ("config should be specified as one of: 'ND-LAr', '2x2'")
+        raise LookupError ("config should be specified as one of: 'ND-LAr', 'fineVox', '2x2'")
 
     nVoxX = int((xMax - xMin)/xWidth)
     nVoxY = int((yMax - yMin)/yWidth)
@@ -40,15 +78,16 @@ def voxelize(tracks, config):
 
     spacing = np.array([xWidth, yWidth, zWidth])
 
-    trackVoxelEdges = (np.linspace(xMin, xMax, nVoxX + 1),
-                       np.linspace(yMin, yMax, nVoxY + 1),
-                       np.linspace(zMin, zMax, nVoxZ + 1))
+    trackVoxelEdges = (np.linspace(xMin, xMax, nVoxX),
+                       np.linspace(yMin, yMax, nVoxY),
+                       np.linspace(zMin, zMax, nVoxZ))
 
     sampleDensity = 1000 # samples per unit (mm) length
 
+    labels = track_labeller(tracks, trajectories)
     # print ('voxelizing tracks')
     # for track in tqdm.tqdm(tracks):
-    for track in tracks:
+    for label, track in zip(labels, tracks):
         start = np.array([track['x_start'],
                           track['y_start'],
                           track['z_start']])
@@ -63,17 +102,30 @@ def voxelize(tracks, config):
         trackSamplePoints = start + trackSampleSpace*(end - start)
         # give each sample the approprate amount of dE
         trackSampleWeights = np.ones(trackSamplePoints.shape[0])*track['dE']/nSamples
+        trackSamplePIDs = np.ones(trackSamplePoints.shape[0])*track['pdgId']
+        trackSampleLabels = np.ones(trackSamplePoints.shape[0])*label
 
         if not 'samplePoints' in dir():
             samplePoints = trackSamplePoints
             sampleWeights = trackSampleWeights
+            samplePIDs = trackSamplePIDs
+            sampleLabels = trackSampleLabels
         else:
             samplePoints = np.concatenate([samplePoints,
                                            trackSamplePoints])
             sampleWeights = np.concatenate([sampleWeights,
                                             trackSampleWeights])
+            samplePIDs = np.concatenate([samplePIDs,
+                                         trackSamplePIDs])
+            sampleLabels = np.concatenate([sampleLabels,
+                                           trackSampleLabels])
 
     ind = np.cast[int]((samplePoints - minVox)//spacing)
+    print (ind)
+    ind = ind[np.min(ind, axis = -1) >= 0]
+    print (ind)
+    ind = ind[np.max(ind, axis = -1) < nVoxX]
+    print (ind)
 
     # print (samplePoints)
     # print (ind)
@@ -83,20 +135,33 @@ def voxelize(tracks, config):
 
     # sum the energy in voxels that are occupied
     voxelContent = defaultdict(int)
-    for coord, w in zip(binCenters.T, sampleWeights):
+    voxelPID = defaultdict(list)
+    voxelLabel = defaultdict(list)
+    for coord, w, pid, label in zip(binCenters.T, sampleWeights, samplePIDs, sampleLabels):
         voxelContent[tuple(coord)] += w
+        voxelPID[tuple(coord)].append(pid)
+        voxelLabel[tuple(coord)].append(label)
 
-    return list(voxelContent.keys()), list(voxelContent.values())
+    modalPID = {key: st.mode(value)[0] for key, value in voxelPID.items()}
+    modalLabel = {key: st.mode(value)[0] for key, value in voxelLabel.items()}
+    
+    return (list(voxelContent.keys()), 
+            list(voxelContent.values()), 
+            list(modalPID.values()), 
+            list(modalLabel.values()))
 
 
 voxel_dtype = np.dtype([("eventID", "u4"),
                         ("xBin", "f4"),
                         ("yBin", "f4"),
                         ("zBin", "f4"),
-                        ("dE", "f4")],
+                        ("dE", "f4"),
+                        ("PID", "u4"),
+                        ("semantic_label", "u4"),
+                    ],
                        align = True)
 
-def main(args):    
+def main(args):
     infile = h5py.File(args.infile, 'r')
     outfile = h5py.File(args.output, 'w')    
     
@@ -113,13 +178,18 @@ def main(args):
                            dtype = voxel_dtype,
                            maxshape = (None,))
 
-    tracks = infile['tracks']
+    try:
+        tracks = infile['tracks']
+    except KeyError:
+        tracks = infile['segments']
+    trajectories = infile['trajectories']
 
     for track_ev_id in tqdm.tqdm(np.unique(tracks['eventID'])):
 
         tracks_ev = tracks[tracks['eventID'] == track_ev_id]
+        traj_ev = trajectories[trajectories['eventID'] == track_ev_id]
             
-        voxelizedEdep = voxelize(tracks_ev, args.config)
+        voxelizedEdep = voxelize(tracks_ev, traj_ev, args.config)
 
         nVox = len(voxelizedEdep[1])
         evVoxels = np.empty(nVox, dtype = voxel_dtype)
@@ -127,6 +197,8 @@ def main(args):
         evVoxels['yBin'] = np.array([pos[1] for pos in voxelizedEdep[0]])
         evVoxels['zBin'] = np.array([pos[2] for pos in voxelizedEdep[0]])
         evVoxels['dE'] = voxelizedEdep[1]
+        evVoxels['PID'] = voxelizedEdep[2]
+        evVoxels['semantic_label'] = voxelizedEdep[3]
         evVoxels['eventID'] = track_ev_id*np.ones(nVox)
 
         nVoxPrev = len(outfile['track_voxels'])
