@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 
-from larndsim import voxelize as vox
-
 from LarpixParser import hit_parser as HitParser
 from LarpixParser import event_parser as EvtParser
 from LarpixParser.geom_to_dict import larpix_layout_to_dict
@@ -61,6 +59,11 @@ def voxelize(tracks, trajectories, config):
         xMin, xMax, xWidth = -2000., 2000., 0.1
         yMin, yMax, yWidth = -2000., 2000., 0.1
         zMin, zMax, zWidth = -2000., 2000., 0.1
+    elif config == 'ND-LAr_large':
+        # finer voxelization
+        xMin, xMax, xWidth = -2000., 2000., 0.38
+        yMin, yMax, yWidth = -2000., 2000., 0.38
+        zMin, zMax, zWidth = -2000., 2000., 0.38
     elif config == '2x2':
         # 2x2
         xMin, xMax, xWidth = -65.5, 65.5, 0.4434
@@ -69,23 +72,39 @@ def voxelize(tracks, trajectories, config):
     else:
         raise LookupError ("config should be specified as one of: 'ND-LAr', 'fineVox', '2x2'")
 
-    nVoxX = int((xMax - xMin)/xWidth)
-    nVoxY = int((yMax - yMin)/yWidth)
-    nVoxZ = int((zMax - zMin)/zWidth)
+    # use strict bin width.  If given min, max intervals are not aligned,
+    # adjust the max bound to fit a full bin
+
+    nVoxXfloat = (xMax - xMin)/xWidth
+    nVoxYfloat = (yMax - yMin)/yWidth
+    nVoxZfloat = (zMax - zMin)/zWidth
     
+    nVoxX = int(nVoxXfloat)
+    nVoxY = int(nVoxYfloat)
+    nVoxZ = int(nVoxZfloat)
+
+    if nVoxXfloat > nVoxX:
+        nVoxX += 1
+        xMax = xWidth*nVoxX + xMin
+    if nVoxYfloat > nVoxY:
+        nVoxY += 1
+        yMax = yWidth*nVoxY + yMin
+    if nVoxZfloat > nVoxZ:
+        nVoxZ += 1
+        zMax = zWidth*nVoxZ + zMin
+
     minVox = np.array([xMin, yMin, zMin])
     maxVox = np.array([xMax, yMax, zMax])
 
     spacing = np.array([xWidth, yWidth, zWidth])
 
-    trackVoxelEdges = (np.linspace(xMin, xMax, nVoxX),
-                       np.linspace(yMin, yMax, nVoxY),
-                       np.linspace(zMin, zMax, nVoxZ))
-
+    trackVoxelEdges = (np.linspace(xMin, xMax, nVoxX+1),
+                       np.linspace(yMin, yMax, nVoxY+1),
+                       np.linspace(zMin, zMax, nVoxZ+1))
+    
     sampleDensity = 1000 # samples per unit (mm) length
 
     labels = track_labeller(tracks, trajectories)
-    # print ('voxelizing tracks')
     # for track in tqdm.tqdm(tracks):
     for label, track in zip(labels, tracks):
         start = np.array([track['x_start'],
@@ -103,12 +122,14 @@ def voxelize(tracks, trajectories, config):
         # give each sample the approprate amount of dE
         trackSampleWeights = np.ones(trackSamplePoints.shape[0])*track['dE']/nSamples
         trackSamplePIDs = np.ones(trackSamplePoints.shape[0])*track['pdgId']
+        trackSamplet0s = np.arange(trackSamplePoints.shape[0])*(track['t0_end'] - track['t0_start'])/trackSamplePoints.shape[0] + track['t0_start']
         trackSampleLabels = np.ones(trackSamplePoints.shape[0])*label
 
         if not 'samplePoints' in dir():
             samplePoints = trackSamplePoints
             sampleWeights = trackSampleWeights
             samplePIDs = trackSamplePIDs
+            samplet0s = trackSamplet0s
             sampleLabels = trackSampleLabels
         else:
             samplePoints = np.concatenate([samplePoints,
@@ -117,18 +138,15 @@ def voxelize(tracks, trajectories, config):
                                             trackSampleWeights])
             samplePIDs = np.concatenate([samplePIDs,
                                          trackSamplePIDs])
+            samplet0s = np.concatenate([samplet0s,
+                                        trackSamplet0s])
             sampleLabels = np.concatenate([sampleLabels,
                                            trackSampleLabels])
 
     ind = np.cast[int]((samplePoints - minVox)//spacing)
-    print (ind)
     ind = ind[np.min(ind, axis = -1) >= 0]
-    print (ind)
     ind = ind[np.max(ind, axis = -1) < nVoxX]
-    print (ind)
-
-    # print (samplePoints)
-    # print (ind)
+    
     # get the bin centers that correspond to each track sample
     binCenters = np.array([trackVoxelEdges[i][ind[:,i]] + 0.5*spacing[i]
                            for i in range(3)])
@@ -136,18 +154,22 @@ def voxelize(tracks, trajectories, config):
     # sum the energy in voxels that are occupied
     voxelContent = defaultdict(int)
     voxelPID = defaultdict(list)
+    voxelt0 = defaultdict(list)
     voxelLabel = defaultdict(list)
-    for coord, w, pid, label in zip(binCenters.T, sampleWeights, samplePIDs, sampleLabels):
+    for coord, w, pid, t0, label in zip(binCenters.T, sampleWeights, samplePIDs, samplet0s, sampleLabels):
         voxelContent[tuple(coord)] += w
         voxelPID[tuple(coord)].append(pid)
+        voxelt0[tuple(coord)].append(t0)
         voxelLabel[tuple(coord)].append(label)
 
-    modalPID = {key: st.mode(value)[0] for key, value in voxelPID.items()}
-    modalLabel = {key: st.mode(value)[0] for key, value in voxelLabel.items()}
+    modalPID = {key: st.mode(value)[0][0] for key, value in voxelPID.items()}
+    mediant0 = {key: np.median(value) for key, value in voxelt0.items()}
+    modalLabel = {key: st.mode(value)[0][0] for key, value in voxelLabel.items()}
     
     return (list(voxelContent.keys()), 
             list(voxelContent.values()), 
             list(modalPID.values()), 
+            list(mediant0.values()), 
             list(modalLabel.values()))
 
 
@@ -157,6 +179,7 @@ voxel_dtype = np.dtype([("eventID", "u4"),
                         ("zBin", "f4"),
                         ("dE", "f4"),
                         ("PID", "u4"),
+                        ("t0", "f4"),
                         ("semantic_label", "u4"),
                     ],
                        align = True)
@@ -198,7 +221,8 @@ def main(args):
         evVoxels['zBin'] = np.array([pos[2] for pos in voxelizedEdep[0]])
         evVoxels['dE'] = voxelizedEdep[1]
         evVoxels['PID'] = voxelizedEdep[2]
-        evVoxels['semantic_label'] = voxelizedEdep[3]
+        evVoxels['t0'] = voxelizedEdep[3]
+        evVoxels['semantic_label'] = voxelizedEdep[4]
         evVoxels['eventID'] = track_ev_id*np.ones(nVox)
 
         nVoxPrev = len(outfile['track_voxels'])
